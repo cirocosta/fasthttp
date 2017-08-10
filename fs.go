@@ -17,20 +17,8 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/gzip"
-  "go.uber.org/zap"
+	"go.uber.org/zap"
 )
-
-var (
-  logger *zap.Logger
-)
-
-func init () {
-  var err error
-  logger, err = zap.NewProduction()
-  if err != nil {
-    panic(err)
-  }
-}
 
 // ServeFileBytesUncompressed returns HTTP response containing file contents
 // from the given path.
@@ -266,6 +254,9 @@ type FS struct {
 	// FSCompressedFileSuffix is used by default.
 	CompressedFileSuffix string
 
+	// Logger
+	Logger *zap.Logger
+
 	once sync.Once
 	h    RequestHandler
 }
@@ -314,6 +305,15 @@ func FSHandler(root string, stripSlashes int) RequestHandler {
 	return fs.NewRequestHandler()
 }
 
+func mustCreateLogger() *zap.Logger {
+	logger, err := zap.NewProduction()
+	if err != nil {
+		panic(err)
+	}
+
+	return logger
+}
+
 // NewRequestHandler returns new request handler with the given FS settings.
 //
 // The returned handler caches requested file handles
@@ -330,6 +330,11 @@ func (fs *FS) NewRequestHandler() RequestHandler {
 
 func (fs *FS) initRequestHandler() {
 	root := fs.Root
+	logger := fs.Logger
+
+	if logger == nil {
+		logger = mustCreateLogger()
+	}
 
 	// serve files from the current working directory if root is empty
 	if len(root) == 0 {
@@ -358,6 +363,7 @@ func (fs *FS) initRequestHandler() {
 		compress:             fs.Compress,
 		acceptByteRange:      fs.AcceptByteRange,
 		cacheDuration:        cacheDuration,
+		logger:               logger,
 		compressedFileSuffix: compressedFileSuffix,
 		cache:                make(map[string]*fsFile),
 		compressedCache:      make(map[string]*fsFile),
@@ -383,6 +389,7 @@ type fsHandler struct {
 	acceptByteRange      bool
 	cacheDuration        time.Duration
 	compressedFileSuffix string
+	logger               *zap.Logger
 
 	cache           map[string]*fsFile
 	compressedCache map[string]*fsFile
@@ -689,9 +696,9 @@ func (h *fsHandler) handleRequest(ctx *RequestCtx) {
 	path = stripTrailingSlashes(path)
 
 	if n := bytes.IndexByte(path, 0); n >= 0 {
-    logger.Info("cannot serve path with nil byte", 
-      zap.Int("position", n), 
-      zap.ByteString("path", path))
+		h.logger.Info("cannot serve path with nil byte",
+			zap.Int("position", n),
+			zap.ByteString("path", path))
 		ctx.Error("Are you a hacker?", StatusBadRequest)
 		return
 	}
@@ -700,9 +707,9 @@ func (h *fsHandler) handleRequest(ctx *RequestCtx) {
 		// since ctx.Path must normalize and sanitize the path.
 
 		if n := bytes.Index(path, strSlashDotDotSlash); n >= 0 {
-      logger.Info("cannot serve path with '/../'", 
-        zap.Int("position", n), 
-        zap.ByteString("path", path))
+			h.logger.Info("cannot serve path with '/../'",
+				zap.Int("position", n),
+				zap.ByteString("path", path))
 			ctx.Error("Not found", StatusNotFound)
 			return
 		}
@@ -729,23 +736,23 @@ func (h *fsHandler) handleRequest(ctx *RequestCtx) {
 		var err error
 		ff, err = h.openFSFile(filePath, mustCompress)
 		if mustCompress && err == errNoCreatePermission {
-      logger.Warn("insufficient permissions for saving compressed file", 
-        zap.String("path", filePath))
+			h.logger.Warn("insufficient permissions for saving compressed file",
+				zap.String("path", filePath))
 			mustCompress = false
 			ff, err = h.openFSFile(filePath, mustCompress)
 		}
 		if err == errDirIndexRequired {
 			ff, err = h.openIndexFile(ctx, filePath, mustCompress)
 			if err != nil {
-        logger.Info("cannot open dir index", 
-          zap.String("path", filePath))
+				h.logger.Info("cannot open dir index",
+					zap.String("path", filePath))
 				ctx.Error("Directory index is forbidden", StatusNotFound)
 				return
 			}
 		} else if err != nil {
-        logger.Info("cannot open file", 
-          zap.String("path", filePath),
-          zap.Error(err))
+			h.logger.Info("cannot open file",
+				zap.String("path", filePath),
+				zap.Error(err))
 			ctx.Error("Cannot open requested path", StatusNotFound)
 			return
 		}
@@ -777,9 +784,9 @@ func (h *fsHandler) handleRequest(ctx *RequestCtx) {
 
 	r, err := ff.NewReader()
 	if err != nil {
-    logger.Error("cannot obtain file reader for path", 
-      zap.ByteString("path", path),
-      zap.Error(err))
+		h.logger.Error("cannot obtain file reader for path",
+			zap.ByteString("path", path),
+			zap.Error(err))
 		ctx.Error("Internal Server Error", StatusInternalServerError)
 		return
 	}
@@ -797,20 +804,20 @@ func (h *fsHandler) handleRequest(ctx *RequestCtx) {
 			startPos, endPos, err := ParseByteRange(byteRange, contentLength)
 			if err != nil {
 				r.(io.Closer).Close()
-        logger.Error("cannot parse byte range", 
-          zap.ByteString("byteRange", byteRange),
-          zap.ByteString("path", path),
-          zap.Error(err))
+				h.logger.Error("cannot parse byte range",
+					zap.ByteString("byteRange", byteRange),
+					zap.ByteString("path", path),
+					zap.Error(err))
 				ctx.Error("Range Not Satisfiable", StatusRequestedRangeNotSatisfiable)
 				return
 			}
 
 			if err = r.(byteRangeUpdater).UpdateByteRange(startPos, endPos); err != nil {
 				r.(io.Closer).Close()
-        logger.Error("cannot seek byte range", 
-          zap.ByteString("byteRange", byteRange),
-          zap.ByteString("path", path),
-          zap.Error(err))
+				h.logger.Error("cannot seek byte range",
+					zap.ByteString("byteRange", byteRange),
+					zap.ByteString("path", path),
+					zap.Error(err))
 				ctx.Error("Internal Server Error", StatusInternalServerError)
 				return
 			}
@@ -830,9 +837,9 @@ func (h *fsHandler) handleRequest(ctx *RequestCtx) {
 		ctx.Response.Header.SetContentLength(contentLength)
 		if rc, ok := r.(io.Closer); ok {
 			if err := rc.Close(); err != nil {
-        logger.Error("cannot close file reader", 
-          zap.ByteString("path", path),
-          zap.Error(err))
+				h.logger.Error("cannot close file reader",
+					zap.ByteString("path", path),
+					zap.Error(err))
 				ctx.Error("Internal Server Error", StatusInternalServerError)
 				return
 			}

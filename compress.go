@@ -7,11 +7,11 @@ import (
 	"os"
 	"sync"
 
+	"github.com/cirocosta/fasthttp/stackless"
 	"github.com/klauspost/compress/flate"
 	"github.com/klauspost/compress/gzip"
 	"github.com/klauspost/compress/zlib"
 	"github.com/valyala/bytebufferpool"
-	"github.com/cirocosta/fasthttp/stackless"
 )
 
 // Supported compression levels.
