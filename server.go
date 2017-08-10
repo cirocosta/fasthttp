@@ -252,7 +252,7 @@ type Server struct {
 	//
 	// Disabled header names' normalization may be useful only for proxying
 	// incoming requests to other servers expecting case-sensitive
-	// header names. See https://github.com/valyala/fasthttp/issues/57
+	// header names. See https://github.com/cirocosta/fasthttp/issues/57
 	// for details.
 	//
 	// By default request and response header names are normalized, i.e.

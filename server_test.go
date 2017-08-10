@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/valyala/fasthttp/fasthttputil"
+	"github.com/cirocosta/fasthttp/fasthttputil"
 )
 
 func TestServerErrSmallBuffer(t *testing.T) {
