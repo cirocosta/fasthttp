@@ -17,7 +17,20 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/gzip"
+  "go.uber.org/zap"
 )
+
+var (
+  logger *zap.Logger
+)
+
+func init () {
+  var err error
+  logger, err = zap.NewProduction()
+  if err != nil {
+    panic(err)
+  }
+}
 
 // ServeFileBytesUncompressed returns HTTP response containing file contents
 // from the given path.
@@ -676,7 +689,9 @@ func (h *fsHandler) handleRequest(ctx *RequestCtx) {
 	path = stripTrailingSlashes(path)
 
 	if n := bytes.IndexByte(path, 0); n >= 0 {
-		ctx.Logger().Printf("cannot serve path with nil byte at position %d: %q", n, path)
+    logger.Info("cannot serve path with nil byte", 
+      zap.Int("position", n), 
+      zap.ByteString("path", path))
 		ctx.Error("Are you a hacker?", StatusBadRequest)
 		return
 	}
@@ -685,8 +700,10 @@ func (h *fsHandler) handleRequest(ctx *RequestCtx) {
 		// since ctx.Path must normalize and sanitize the path.
 
 		if n := bytes.Index(path, strSlashDotDotSlash); n >= 0 {
-			ctx.Logger().Printf("cannot serve path with '/../' at position %d due to security reasons: %q", n, path)
-			ctx.Error("Internal Server Error", StatusInternalServerError)
+      logger.Info("cannot serve path with '/../'", 
+        zap.Int("position", n), 
+        zap.ByteString("path", path))
+			ctx.Error("Not found", StatusNotFound)
 			return
 		}
 	}
@@ -712,20 +729,23 @@ func (h *fsHandler) handleRequest(ctx *RequestCtx) {
 		var err error
 		ff, err = h.openFSFile(filePath, mustCompress)
 		if mustCompress && err == errNoCreatePermission {
-			ctx.Logger().Printf("insufficient permissions for saving compressed file for %q. Serving uncompressed file. "+
-				"Allow write access to the directory with this file in order to improve fasthttp performance", filePath)
+      logger.Warn("insufficient permissions for saving compressed file", 
+        zap.String("path", filePath))
 			mustCompress = false
 			ff, err = h.openFSFile(filePath, mustCompress)
 		}
 		if err == errDirIndexRequired {
 			ff, err = h.openIndexFile(ctx, filePath, mustCompress)
 			if err != nil {
-				ctx.Logger().Printf("cannot open dir index %q: %s", filePath, err)
-				ctx.Error("Directory index is forbidden", StatusForbidden)
+        logger.Info("cannot open dir index", 
+          zap.String("path", filePath))
+				ctx.Error("Directory index is forbidden", StatusNotFound)
 				return
 			}
 		} else if err != nil {
-			ctx.Logger().Printf("cannot open file %q: %s", filePath, err)
+        logger.Info("cannot open file", 
+          zap.String("path", filePath),
+          zap.Error(err))
 			ctx.Error("Cannot open requested path", StatusNotFound)
 			return
 		}
@@ -757,7 +777,9 @@ func (h *fsHandler) handleRequest(ctx *RequestCtx) {
 
 	r, err := ff.NewReader()
 	if err != nil {
-		ctx.Logger().Printf("cannot obtain file reader for path=%q: %s", path, err)
+    logger.Error("cannot obtain file reader for path", 
+      zap.ByteString("path", path),
+      zap.Error(err))
 		ctx.Error("Internal Server Error", StatusInternalServerError)
 		return
 	}
@@ -775,14 +797,20 @@ func (h *fsHandler) handleRequest(ctx *RequestCtx) {
 			startPos, endPos, err := ParseByteRange(byteRange, contentLength)
 			if err != nil {
 				r.(io.Closer).Close()
-				ctx.Logger().Printf("cannot parse byte range %q for path=%q: %s", byteRange, path, err)
+        logger.Error("cannot parse byte range", 
+          zap.ByteString("byteRange", byteRange),
+          zap.ByteString("path", path),
+          zap.Error(err))
 				ctx.Error("Range Not Satisfiable", StatusRequestedRangeNotSatisfiable)
 				return
 			}
 
 			if err = r.(byteRangeUpdater).UpdateByteRange(startPos, endPos); err != nil {
 				r.(io.Closer).Close()
-				ctx.Logger().Printf("cannot seek byte range %q for path=%q: %s", byteRange, path, err)
+        logger.Error("cannot seek byte range", 
+          zap.ByteString("byteRange", byteRange),
+          zap.ByteString("path", path),
+          zap.Error(err))
 				ctx.Error("Internal Server Error", StatusInternalServerError)
 				return
 			}
@@ -802,7 +830,9 @@ func (h *fsHandler) handleRequest(ctx *RequestCtx) {
 		ctx.Response.Header.SetContentLength(contentLength)
 		if rc, ok := r.(io.Closer); ok {
 			if err := rc.Close(); err != nil {
-				ctx.Logger().Printf("cannot close file reader: %s", err)
+        logger.Error("cannot close file reader", 
+          zap.ByteString("path", path),
+          zap.Error(err))
 				ctx.Error("Internal Server Error", StatusInternalServerError)
 				return
 			}
