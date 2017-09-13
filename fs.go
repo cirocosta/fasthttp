@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/gzip"
+  "golang.org/x/sys/unix"
 	"go.uber.org/zap"
 )
 
@@ -1142,6 +1143,11 @@ func (h *fsHandler) openFSFile(filePath string, mustCompress bool) (*fsFile, err
 		}
 		return nil, errDirIndexRequired
 	}
+
+  err = unix.Fadvise(int(f.Fd()), 0, 0, 4)
+  if err != nil {
+    fmt.Printf("ERROR: couldn't favdvise file %+v\n", fileInfo)
+  }
 
 	if mustCompress {
 		fileInfoOriginal, err := os.Stat(filePathOriginal)
